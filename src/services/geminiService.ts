@@ -1,104 +1,58 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import { Profile, IcebreakerRequest } from "../types";
+import { IcebreakerRequest } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const timeout = (ms: number) =>
+  new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timeout")), ms));
 
-// Helper for timeout
-const timeoutPromise = (ms: number) => new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), ms));
+export async function generateIcebreaker(req: IcebreakerRequest): Promise<string> {
+  const fallback =
+    "Olá! Vi seu perfil e achei sua experiência muito interessante. Gostaria de conectar para trocar ideias.";
 
-export const generateIcebreaker = async (request: IcebreakerRequest): Promise<string> => {
   try {
-    const prompt = `
-      Você é um especialista em networking profissional.
-      Gere uma mensagem de conexão para o LinkedIn (curta, profissional e amigável, máximo 300 caracteres).
-      
-      Remetente: ${request.myProfile.name}, Cargo: ${request.myProfile.role}, Área: ${request.myProfile.area}.
-      Destinatário: ${request.targetProfile.name}, Cargo: ${request.targetProfile.role}, Área: ${request.targetProfile.area}.
-      
-      A mensagem deve mencionar o interesse na área de ${request.targetProfile.area} e sugerir uma troca de conhecimentos.
-      Não use hashtags.
-    `;
-
-    // Race between AI and 8s timeout
-    const response: any = await Promise.race([
-      ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
+    const r = await Promise.race([
+      fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "icebreaker", payload: req }),
       }),
-      timeoutPromise(8000)
+      timeout(12000),
     ]);
 
-    return response.text || "Não foi possível gerar a mensagem.";
-  } catch (error) {
-    console.error("Error generating icebreaker:", error);
-    return "Olá! Vi seu perfil e achei sua experiência muito interessante. Gostaria de conectar para acompanhar seu trabalho.";
+    const data = await (r as Response).json();
+    return (data?.text && String(data.text).trim()) ? String(data.text).trim() : fallback;
+  } catch {
+    return fallback;
   }
-};
+}
 
-export const enhanceProfileData = async (role: string, area: string): Promise<{
-  normalizedRole: string;
-  normalizedArea: string;
-  bio: string;
-  tags: string[];
-}> => {
+export async function enhanceProfileData(role: string, area: string) {
   const fallback = {
     normalizedRole: role,
     normalizedArea: area,
     bio: `${role} atuando na área de ${area}.`,
-    tags: [area, 'Networking']
+    tags: [area, "Networking"],
   };
 
-  if (!process.env.API_KEY) return fallback;
-
   try {
-    const prompt = `
-      Analise os dados deste profissional:
-      Cargo Entrada: "${role}"
-      Área Entrada: "${area}"
-
-      Tarefas:
-      1. Normalize o Cargo (ex: "Ger Prod" -> "Gerente de Produto").
-      2. Normalize a Área (ex: "Mkt" -> "Marketing").
-      3. Crie uma Bio curta de impacto (max 120 caracteres).
-      4. Gere 3 Tags técnicas/profissionais relevantes.
-    `;
-
-    // Strict 6 second timeout for registration UX
-    const response: any = await Promise.race([
-      ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
-        config: { 
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              normalizedRole: { type: Type.STRING },
-              normalizedArea: { type: Type.STRING },
-              bio: { type: Type.STRING },
-              tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-            },
-            required: ["normalizedRole", "normalizedArea", "bio", "tags"],
-          }
-        }
+    const r = await Promise.race([
+      fetch("/api/gemini", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "enhance", payload: { role, area } }),
       }),
-      timeoutPromise(6000)
+      timeout(12000),
     ]);
 
-    const text = response.text;
-    if (!text) return fallback;
+    const data = await (r as Response).json();
+    if (!data?.text) return fallback;
 
-    const data = JSON.parse(text);
-
+    const parsed = JSON.parse(data.text);
     return {
-      normalizedRole: data.normalizedRole || role,
-      normalizedArea: data.normalizedArea || area,
-      bio: data.bio || fallback.bio,
-      tags: data.tags || fallback.tags
+      normalizedRole: parsed.normalizedRole || role,
+      normalizedArea: parsed.normalizedArea || area,
+      bio: parsed.bio || fallback.bio,
+      tags: Array.isArray(parsed.tags) ? parsed.tags : fallback.tags,
     };
-
-  } catch (error) {
-    console.error("Error enhancing profile:", error);
+  } catch {
     return fallback;
   }
-};
+}
