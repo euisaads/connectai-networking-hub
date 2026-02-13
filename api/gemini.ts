@@ -1,110 +1,93 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { GoogleGenAI, Type } from "@google/genai";
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+const API_KEY = process.env.GEMINI_API_KEY;
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return res.status(500).json({ error: "Missing GEMINI_API_KEY" });
-
-    const { kind, payload } = req.body ?? {};
-    if (!kind) return res.status(400).json({ error: "Missing kind" });
-
-    const ai = new GoogleGenAI({ apiKey });
-
-    if (kind === "icebreaker") {
-      const { myProfile, targetProfile } = payload;
-
-      const prompt = buildIcebreakerPrompt(myProfile, targetProfile);
-
-      const response: any = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          temperature: 0.7,
-          topP: 0.9,
-        },
-      });
-
-      return res.status(200).json({ text: response?.text ?? "" });
-    }
-
-    if (kind === "enhance") {
-      const { role, area } = payload;
-
-      const prompt = buildEnhancePrompt(role, area);
-
-      const response: any = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          temperature: 0.8,
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              normalizedRole: { type: Type.STRING },
-              normalizedArea: { type: Type.STRING },
-              bio: { type: Type.STRING },
-              tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-            },
-            required: ["normalizedRole", "normalizedArea", "bio", "tags"],
-          },
-        },
-      });
-
-      return res.status(200).json({ text: response?.text ?? "" });
-    }
-
-    return res.status(400).json({ error: "Invalid kind" });
-  } catch (e: any) {
-    console.error(e);
-    return res.status(500).json({ error: "Server error" });
-  }
+if (!API_KEY) {
+  console.warn("⚠ GEMINI_API_KEY not set in Vercel Environment Variables.");
 }
 
-function buildIcebreakerPrompt(my: any, target: any) {
+const createAI = () => new GoogleGenAI({ apiKey: API_KEY! });
+
+function buildEnhancePrompt(role: string, area: string, linkedinAbout?: string) {
   return `
-Você é especialista em networking no LinkedIn.
-Escreva UMA mensagem curta (até 300 caracteres), profissional, sem emojis e sem hashtags.
-
-Meu perfil:
-- Nome: ${my?.name}
-- Cargo: ${my?.role}
-- Área: ${my?.area}
-
-Perfil da pessoa:
-- Nome: ${target?.name}
-- Cargo: ${target?.role}
-- Área: ${target?.area}
-
-Regras:
-- citar 1 ponto em comum (área ou cargo)
-- convidar para trocar experiências
-- terminar com uma pergunta simples
-`.trim();
-}
-
-function buildEnhancePrompt(role: string, area: string) {
-  return `
-Você é um consultor de carreira e branding profissional.
-Sua tarefa é refinar cargo/área e criar um resumo mais específico.
+Você é um especialista em branding profissional no Brasil (pt-BR).
 
 Entrada:
 - Cargo: "${role}"
 - Área: "${area}"
+${linkedinAbout ? `- LinkedIn Sobre: "${linkedinAbout}"` : ""}
 
-Saída JSON (obrigatório):
-- normalizedRole: cargo por extenso e padronizado (pt-BR)
-- normalizedArea: área padronizada (pt-BR)
-- bio: 1 frase forte e específica (até 120 caracteres), evitando genérico como "focado em resultados"
-- tags: 3 a 5 tags com # (ex: "#BPO", "#GestãoDeProcessos"), sem repetir a área literalmente
+Sua tarefa:
+1. Normalizar o cargo para versão profissional por extenso.
+2. Normalizar a área (ex: "Cursando T.I" → "Tecnologia da Informação").
+3. Criar uma bio curta (máx 120 caracteres), específica e profissional.
+4. Criar exatamente 3 tags iniciando com #, curtas e relevantes.
 
-Exemplos de bom nível (NÃO copie, só use como referência):
-- bio: "Analista de BPO otimizando processos e automatizando rotinas para eficiência operacional."
-- tags: ["#BPO", "#GestãoDeProcessos", "#MelhoriaContínua", "#Automação"]
+Regras importantes:
+- Evitar frases genéricas como "focado em resultados".
+- Se houver indício de transição de carreira, mencionar isso.
+- Tags devem ser técnicas ou estratégicas.
 
-Agora gere a saída.
+Exemplo esperado:
+Entrada:
+Cargo="Cursando T.I"
+Área="Cursando T.I"
+
+Saída JSON:
+{
+  "normalizedRole": "Estudante / Cursando T.I",
+  "normalizedArea": "Tecnologia da Informação",
+  "bio": "Especialista em BPO focado em otimização de processos e em transição para o setor de Tecnologia da Informação.",
+  "tags": ["#BPO", "#Processos", "#TI"]
+}
+
+Retorne apenas JSON válido.
 `.trim();
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  try {
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    if (!API_KEY) {
+      return res.status(500).json({ error: "GEMINI_API_KEY not configured" });
+    }
+
+    const { role, area, linkedinAbout } = req.body ?? {};
+
+    if (!role || !area) {
+      return res.status(400).json({ error: "Missing role or area" });
+    }
+
+    const ai = createAI();
+    const prompt = buildEnhancePrompt(role, area, linkedinAbout);
+
+    const response: any = await ai.models.generateContent({
+      model: "gemini-3.2-mini",
+      contents: prompt,
+      config: {
+        temperature: 0.6,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            normalizedRole: { type: Type.STRING },
+            normalizedArea: { type: Type.STRING },
+            bio: { type: Type.STRING },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["normalizedRole", "normalizedArea", "bio", "tags"]
+        }
+      }
+    });
+
+    return res.status(200).json({ text: response?.text ?? "" });
+
+  } catch (error: any) {
+    console.error("❌ Gemini API error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 }
