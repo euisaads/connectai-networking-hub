@@ -1,16 +1,24 @@
-import EmailGate from './components/EmailGate';
-import React, { useEffect, useState } from 'react';
-import { supabase } from './lib/supabase';
+import React, { useEffect, useState } from "react";
 
-import Header from './components/Header';
-import ProfileCard from './components/ProfileCard';
-import RegistrationForm from './components/RegistrationForm';
-import IcebreakerModal from './components/IcebreakerModal';
+import Header from "./components/Header";
+import EmailGate from "./components/EmailGate";
+import ProfileCard from "./components/ProfileCard";
+import RegistrationForm from "./components/RegistrationForm";
+import IcebreakerModal from "./components/IcebreakerModal";
 
-import { Profile, NetworkingMode } from './types';
-import { api } from './services/api';
+import { Profile, NetworkingMode } from "./types";
+import { api } from "./services/api";
 
-import { Search, Filter, Loader2, UserPlus, X, MapPin } from 'lucide-react';
+import { Search, Filter, Loader2, UserPlus, X, MapPin } from "lucide-react";
+
+/**
+ * App principal
+ * - Adiciona EmailGate (primeira tela: inserir e-mail)
+ * - Salva e-mail em localStorage (connectai_current_email)
+ * - Depois mostra o diretório / registro normalmente
+ *
+ * Observação: este fluxo NÃO valida propriedade do e-mail (MVP).
+ */
 
 const App: React.FC = () => {
   // Data State
@@ -18,20 +26,22 @@ const App: React.FC = () => {
   const [followedIds, setFollowedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
-  // Auth state (Etapa 1)
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  // "Sessão" simples via e-mail (MVP)
+  const [currentEmail, setCurrentEmail] = useState<string | null>(() => {
+    return localStorage.getItem("connectai_current_email");
+  });
 
   // UI State
   const [mode, setMode] = useState<NetworkingMode>(NetworkingMode.VIEW);
   const [myProfileId, setMyProfileId] = useState<string | null>(() => {
-    return localStorage.getItem('connectai_my_id') || null;
+    return localStorage.getItem("connectai_my_id") || null;
   });
   const [editTarget, setEditTarget] = useState<Profile | undefined>(undefined);
 
   // Filter State
-  const [search, setSearch] = useState('');
-  const [areaFilter, setAreaFilter] = useState('Todas');
-  const [cityFilter, setCityFilter] = useState('Todas');
+  const [search, setSearch] = useState("");
+  const [areaFilter, setAreaFilter] = useState("Todas");
+  const [cityFilter, setCityFilter] = useState("Todas");
 
   // Icebreaker State
   const [icebreakerTarget, setIcebreakerTarget] = useState<Profile | null>(null);
@@ -39,27 +49,12 @@ const App: React.FC = () => {
 
   // Initial Load
   useEffect(() => {
+    // Carrega dados iniciais (sempre)
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auth listener (Etapa 1) — sessão e mudanças
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      setUserEmail(data?.session?.user?.email ?? null);
-    })();
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUserEmail(session?.user?.email ?? null);
-    });
-
-    return () => {
-      listener?.subscription?.unsubscribe();
-    };
-  }, []);
-
-  // Reload when filters change
+  // Reload when filters change (debounced)
   useEffect(() => {
     const timer = setTimeout(() => {
       loadData();
@@ -67,23 +62,6 @@ const App: React.FC = () => {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, areaFilter, cityFilter]);
-
-  // Magic Link (Etapa 1)
-  const sendMagicLink = async (email: string) => {
-    const { error } = await supabase.auth.signInWithOtp({ email });
-    if (error) {
-      alert('Erro ao enviar link: ' + error.message);
-      throw error;
-    }
-  };
-
-  const logout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      alert('Erro ao sair: ' + error.message);
-      throw error;
-    }
-  };
 
   const loadData = async () => {
     setLoading(true);
@@ -104,13 +82,28 @@ const App: React.FC = () => {
     }
   };
 
+  // --- Email Gate handlers (Etapa 1) ---
+  const handleEmailAccess = (email: string) => {
+    const normalized = email.trim().toLowerCase();
+    localStorage.setItem("connectai_current_email", normalized);
+    setCurrentEmail(normalized);
+    // opcional: podemos tentar localizar automaticamente o perfil vinculado ao e-mail
+    // isso ficará para a Etapa 2 (integração com Supabase)
+  };
+
+  const handleLogoutEmail = () => {
+    localStorage.removeItem("connectai_current_email");
+    setCurrentEmail(null);
+  };
+
+  // --- Profile CRUD UI handlers (mantidos) ---
   const handleSaveProfile = (savedProfile: Profile) => {
     if (mode === NetworkingMode.EDIT) {
       setProfiles(profiles.map((p) => (p.id === savedProfile.id ? savedProfile : p)));
     } else {
       setProfiles([savedProfile, ...profiles]);
       setMyProfileId(savedProfile.id);
-      localStorage.setItem('connectai_my_id', savedProfile.id);
+      localStorage.setItem("connectai_my_id", savedProfile.id);
     }
 
     setMode(NetworkingMode.VIEW);
@@ -124,24 +117,28 @@ const App: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm('Tem certeza que deseja excluir seu perfil? Esta ação não pode ser desfeita.')) {
+    if (confirm("Tem certeza que deseja excluir seu perfil? Esta ação não pode ser desfeita.")) {
       try {
         await api.deleteProfile(id);
         if (id === myProfileId) {
           setMyProfileId(null);
-          localStorage.removeItem('connectai_my_id');
+          localStorage.removeItem("connectai_my_id");
         }
         await loadData();
       } catch (e) {
-        alert('Erro ao excluir perfil');
+        alert("Erro ao excluir perfil");
       }
     }
   };
 
   const handleFollow = (id: string, url: string) => {
-    window.open(url, '_blank');
-    api.trackAction(id, 'assumed_follow');
+    // abre linkedin
+    window.open(url, "_blank");
 
+    // track action local
+    api.trackAction(id, "assumed_follow");
+
+    // update UI
     const newFollowed = new Set(followedIds);
     newFollowed.add(id);
     setFollowedIds(newFollowed);
@@ -149,7 +146,7 @@ const App: React.FC = () => {
 
   const handleOpenIcebreaker = (target: Profile) => {
     if (!myProfileId) {
-      if (confirm('Para gerar uma mensagem personalizada, precisamos saber quem é você. Deseja criar seu perfil agora?')) {
+      if (confirm("Para gerar uma mensagem personalizada, precisamos saber quem é você. Deseja criar seu perfil agora?")) {
         setMode(NetworkingMode.REGISTER);
       }
       return;
@@ -167,15 +164,25 @@ const App: React.FC = () => {
 
   const myProfile = profiles.find((p) => p.id === myProfileId) || null;
 
+  // === EmailGate: se não houver e-mail salvo, mostra a tela de inserção ===
+  if (!currentEmail) {
+    return <EmailGate onSubmitEmail={handleEmailAccess} />;
+  }
+
+  // === App principal ===
   return (
     <div className="min-h-screen bg-slate-50 text-gray-800 font-sans pb-20">
       <Header
         mode={mode}
         setMode={setMode}
         totalProfiles={profiles.length}
-        userEmail={userEmail}
-        onSendMagicLink={sendMagicLink}
-        onLogout={logout}
+        // Passa e-mail atual e função para "sair"
+        userEmail={currentEmail}
+        // onSendMagicLink mantém-se por compatibilidade com o Header anterior — passamos um noop
+        onSendMagicLink={async () => {}}
+        onLogout={async () => {
+          handleLogoutEmail();
+        }}
       />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -261,12 +268,12 @@ const App: React.FC = () => {
               </div>
 
               {/* Clear Filters */}
-              {(search || areaFilter !== 'Todas' || cityFilter !== 'Todas') && (
+              {(search || areaFilter !== "Todas" || cityFilter !== "Todas") && (
                 <button
                   onClick={() => {
-                    setSearch('');
-                    setAreaFilter('Todas');
-                    setCityFilter('Todas');
+                    setSearch("");
+                    setAreaFilter("Todas");
+                    setCityFilter("Todas");
                   }}
                   className="p-2.5 text-gray-500 hover:bg-gray-100 rounded-lg"
                   title="Limpar filtros"
@@ -299,6 +306,7 @@ const App: React.FC = () => {
                     onGenerateIcebreaker={handleOpenIcebreaker}
                     onEdit={handleEdit}
                     onDelete={handleDelete}
+                    // isMe logic -> atualmente usa myProfileId (localStorage). Na Etapa 2 iremos ligar por email/owner_id.
                     isMe={profile.id === myProfileId}
                   />
                 ))}
@@ -309,12 +317,7 @@ const App: React.FC = () => {
       </main>
 
       {/* AI Modal */}
-      <IcebreakerModal
-        isOpen={isIcebreakerOpen}
-        onClose={() => setIsIcebreakerOpen(false)}
-        targetProfile={icebreakerTarget}
-        myProfile={myProfile}
-      />
+      <IcebreakerModal isOpen={isIcebreakerOpen} onClose={() => setIsIcebreakerOpen(false)} targetProfile={icebreakerTarget} myProfile={myProfile} />
     </div>
   );
 };
